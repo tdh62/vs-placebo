@@ -18,7 +18,7 @@ see the libplacebo header files.
 
 &nbsp;
 
-#### `placebo.Tonemap(clip clip[, int src_csp, int dst_csp, int dst_prim, float src_max, float src_min, float dst_max, float dst_min, int dynamic_peak_detection, float smoothing_period, float scene_threshold_low, float scene_threshold_high, int gamut_mapping, int tone_mapping_function, float tone_mapping_param, bool use_dovi, bool visualize_lut])`
+#### `placebo.Tonemap(clip clip[, int src_csp, int dst_csp, int dst_prim, float src_max, float src_min, float dst_max, float dst_min, int dynamic_peak_detection, float smoothing_period, float scene_threshold_low, float scene_threshold_high, float percentile, int gamut_mapping, int tone_mapping_function, float tone_mapping_param, bool use_dovi, bool visualize_lut])`
 
 Performs color mapping (which includes tonemapping from HDR to SDR, but can do a lot more).  
 Expects RGB48 or YUVxxxP16 input.  
@@ -31,7 +31,13 @@ For example, to map from [BT.2020, PQ] (HDR) to traditional [BT.709, BT.1886] (S
 - `src_max, src_min, dst_max, dst_min`: Source/target display levels, in nits (cd/m^2). Source can be derived from props if available.
 - `dynamic_peak_detection`: enables computation of signal stats to optimize HDR tonemapping quality. Enabled by default.
 - `smoothing_period, scene_threshold_low, scene_threshold_high, percentile`: peak detection params. See [here](https://github.com/haasn/libplacebo/blob/master/src/include/libplacebo/shaders/colorspace.h#L103).
-    - `percentile` only in v5.264.0+.
+- `percentile`: Which percentile of the input image brightness histogram to
+    consider as the true peak of the scene. If this is set to `100` (or `0`),
+    the brightest pixel is measured. Otherwise, the top of the frequency
+    distribution is progressively cut off. Setting this too low will cause
+    clipping of very bright details, but can improve the dynamic brightness
+    range of scenes with very bright isolated highlights.
+    Defaults to `100.0`.
 - `gamut_mapping`: Gamut mapping function to use to handle out-of-gamut colors,
 including colors which are out-of-gamut as a consequence of tone mapping.
 Defaults to 1 (perceptual). The following options are available:
