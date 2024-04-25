@@ -2,10 +2,10 @@ defaults:
   run:
     shell: bash
 
-on:
-  workflow_dispatch:
+on: [push, pull_request, workflow_dispatch]
 
-name: vs-placebo build
+permissions:
+  contents: read
 
 jobs:
   build_vs_placebo:
