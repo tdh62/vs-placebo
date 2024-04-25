@@ -7,27 +7,23 @@ permissions:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.1.6
+        uses: actions/checkout@v6.0.2
         with:
           submodules: recursive
 
       - name: Setup Python
-        uses: actions/setup-python@v5.1.0
+        uses: actions/setup-python@v6.2.0
         with:
-          python-version: "3.12.3"
-      - name: Update pipx
-        run: |
-          pip install --upgrade pipx
-          pipx --version
-      - name: Add pipx apps to PATH
-        run: |
-          echo "/root/.local/bin" >> $GITHUB_PATH
-          echo "/opt/pipx_bin" >> $GITHUB_PATH
+          python-version: "3.14.3"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7.6.0
       - name: Install Python dependencies
-        run: sudo pipx --global install meson ninja
+        run: |
+          uv tool install meson
+          uv tool install ninja
 
       - name: Install APT dependencies
         run: |
@@ -41,7 +37,7 @@ jobs:
           sudo apt install -y cmake glslang-dev shaderc vulkan-headers
 
       - name: Checkout SPIRV
-        uses: actions/checkout@v4.1.5
+        uses: actions/checkout@v6.0.2
         with:
           repository: KhronosGroup/SPIRV-Cross
           ref: sdk-1.3.236.0
@@ -52,10 +48,11 @@ jobs:
           cmake -H. -Bbuild -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DSPIRV_CROSS_SHARED=ON -DSPIRV_CROSS_CLI=OFF \
             -DSPIRV_CROSS_ENABLE_TESTS=OFF ..
-          sudo /opt/pipx_bin/ninja -Cbuild install
+          ninja -Cbuild
+          sudo $(which ninja) -Cbuild install
 
       - name: Checkout VapourSynth
-        uses: actions/checkout@v4.1.5
+        uses: actions/checkout@v6.0.2
         with:
           repository: vapoursynth/vapoursynth
           ref: R68
@@ -86,11 +83,11 @@ jobs:
         shell: msys2 {0}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
       - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2.25.0
+        uses: msys2/setup-msys2@v2.27.0
         with:
           msystem: UCRT64
           install: >-
@@ -111,79 +108,18 @@ jobs:
             mingw-w64-ucrt-x86_64-shaderc
       - name: Build vs-placebo
         run: |
-          echo "short_date=$(date "+%Y%m%d")" >> $GITHUB_ENV
-          echo "random_hash=$(echo $RANDOM | md5sum | head -c 20)" >> $GITHUB_ENV
-
-      - name: Installing dependencies
-        run: |
-          echo -e "[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> /etc/pacman.conf
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed git gyp mercurial subversion ninja cmake meson \
-            ragel yasm nasm asciidoc enca gperf unzip p7zip gcc-multilib clang \
-            python-pip curl openssl
-
-          pip3 install rst2pdf mako jsonschema
-          git config --global user.name "github-actions"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory $PWD
-
-      - uses: actions/checkout@v3
+          meson setup build --buildtype release --prefer-static --default-library=static -Dcpp_link_args='-static' -Dlibplacebo:demos=false -Dlibplacebo:glslang=enabled
+          meson compile -vC build
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4.1.0
+        if: ${{ github.event_name == 'push' }}
         with:
-          repository: quietvoid/mpv-winbuild-cmake
-          ref: vs-placebo-libdovi
-
-      - name: Downloading source
+          subject-path: build/libvs_placebo.dll
+      - name: Export version
         run: |
-          cmake -DTARGET_ARCH=x86_64-w64-mingw32 -DALWAYS_REMOVE_BUILDFILES=ON -DSINGLE_SOURCE_LOCATION=$PWD/src_packages -DRUSTUP_LOCATION=$PWD/install_rustup -G Ninja -Bbuild64 -H.
-          ninja -C build64 download || true
-
-      - name: Building toolchain
-        id: build_toolchain
-        continue-on-error: true
-        run: ninja -C build64 gcc
-
-      - name: Update dependencies
-        id: update_deps
-        continue-on-error: true
-        run: |
-          ninja -C build64 update
-
-      - name: Building vs-placebo
-        id: build_vs_placebo
-        if: ${{ steps.build_toolchain.outcome == 'success' }}
-        continue-on-error: true
-        run: |
-          ninja -C build64 vs-placebo
-
-      - name: Packaging vs-placebo
-        id: packaging_vs_placebo
-        if: ${{ steps.build_vs_placebo.outcome == 'success' }}
-        continue-on-error: true
-        run: |
-          mkdir -p release
-          mv build64/install/x86_64-w64-mingw32/lib64/vapoursynth/libvs_placebo.dll .
-          7z a ./release/libvs_placebo.zip libvs_placebo.dll
-          rm -f ./libvs_placebo.dll
-
-      - name: Uploading release
-        id: uploading_release
-        if: ${{ steps.packaging_vs_placebo.outcome == 'success' }}
-        uses: actions/upload-artifact@v3
+          echo "ARTIFACT_VERSION=$(meson introspect --projectinfo build | jq -r '.version')" >> $GITHUB_ENV
+      - name: Upload
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: vs-placebo
           path: release
-
-      - name: Collecting logs
-        if: always()
-        run: |
-          mkdir -p build64_logs
-          cp -fr $(find build64 -type f -iname "*-*.log") build64_logs || true
-          7z a -m0=lzma2 -mx=9 -ms=on logs.7z build*logs
-
-      - name: Uploading logs
-        uses: actions/upload-artifact@master
-        if: always()
-        with:
-          name: logs
-          path: logs.7z
-          retention-days: 1
