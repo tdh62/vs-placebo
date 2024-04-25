@@ -99,7 +99,6 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
                             "percentile:float:opt;"
                             "gamut_mapping:int:opt;"
                             "tone_mapping_function:int:opt;tone_mapping_function_s:data:opt;"
-                            "tone_mapping_mode:int:opt;"
                             "tone_mapping_param:float:opt;tone_mapping_crosstalk:float:opt;"
                             "metadata:int:opt;"
                             "use_dovi:int:opt;"
