@@ -29,9 +29,10 @@ See the `supported_colorspace` in `tonemap.c` for the valid src/dst colorspaces.
 For example, to map from [BT.2020, PQ] (HDR) to traditional [BT.709, BT.1886] (SDR), pass `src_csp=1, dst_csp=0`.
 - `dst_prim`: Target color primaries. See [pl_color_primaries](https://github.com/haasn/libplacebo/blob/master/src/include/libplacebo/colorspace.h#L193) for valid values.
 - `src_max, src_min, dst_max, dst_min`: Source/target display levels, in nits (cd/m^2). Source can be derived from props if available.
+
 - `dynamic_peak_detection`: enables computation of signal stats to optimize HDR tonemapping quality. Enabled by default.
 - `smoothing_period, scene_threshold_low, scene_threshold_high, percentile`: peak detection params. See [here](https://github.com/haasn/libplacebo/blob/master/src/include/libplacebo/shaders/colorspace.h#L103).
-- `percentile`: Which percentile of the input image brightness histogram to
+    - `percentile`: Which percentile of the input image brightness histogram to
     consider as the true peak of the scene. If this is set to `100` (or `0`),
     the brightest pixel is measured. Otherwise, the top of the frequency
     distribution is progressively cut off. Setting this too low will cause
@@ -40,20 +41,47 @@ For example, to map from [BT.2020, PQ] (HDR) to traditional [BT.709, BT.1886] (S
     Defaults to `100.0`.
 - `gamut_mapping`: Gamut mapping function to use to handle out-of-gamut colors,
 including colors which are out-of-gamut as a consequence of tone mapping.
-Defaults to 1 (perceptual). The following options are available:
-    - 0 clip 
-    - 1 perceptual
-    - 2 softclip 
-    - 3 relative
-    - 4 saturation
-    - 5 absolute
-    - 6 desaturate
-    - 7 darken
-    - 8 highlight
-    - 9 linear
-- `tone_mapping_function, tone_mapping_param, metadata`:
- [Color mapping params](https://github.com/haasn/libplacebo/blob/master/src/include/libplacebo/shaders/colorspace.h#L261).
-- `tone_mapping_function_s`: Tone mapping function name, overwrites `tone_mapping_function` number.
+Defaults to 1 (`perceptual`). The following options are available:
+    | `gamut_mapping` | Function | Description |
+    | ----- | -------- | ----------- |
+    | 0 | clip | Performs no gamut-mapping, just hard clips out-of-range colors per-channel. |
+    | 1 | perceptual | Performs a perceptually balanced (saturation) gamut mapping, using a soft knee function to preserve in-gamut colors, followed by a final softclip operation. This works bidirectionally, meaning it can both compress and expand the gamut. Behaves similar to a blend of `saturation` and `softclip`. |
+    | 2 | softclip | Performs a perceptually balanced gamut mapping using a soft knee function to roll-off clipped regions, and a hue shifting function to preserve saturation. |
+    | 3 | relative | Performs relative colorimetric clipping, while maintaining an exponential relationship between brightness and chromaticity. |
+    | 4 | saturation | Performs simple RGB->RGB saturation mapping. The input R/G/B channels are mapped directly onto the output R/G/B channels. Will never clip, but will distort all hues and/or result in a faded look. |
+    | 5 | absolute | Performs absolute colorimetric clipping. Like `relative`, but does not adapt the white point. |
+    | 6 | desaturate | Performs constant-luminance colorimetric clipping, desaturing colors towards white until they're in-range. |
+    | 7 | darken | Uniformly darkens the input slightly to prevent clipping on blown-out highlights, then clamps colorimetrically to the input gamut boundary, biased slightly to preserve chromaticity over luminance. |
+    | 8 | highlight | Performs no gamut mapping, but simply highlights out-of-gamut pixels. |
+    | 9 | linear | Linearly/uniformly desaturates the image in order to bring the entire image into the target gamut. |
+- `tone_mapping_function`, `tone_mapping_function_s`: Tone mapping function to
+use for adapting between difference luminance ranges, including black point
+adaptation. May be specified as either the integer value or the function name;
+if both are passed, the function name is used. Defaults to 1 (`spline`).
+    | `tone_mapping_function` | `tone_mapping_function_s` | Description |
+    | --- | --- | --- |
+    | 0  | clip | Performs no tone-mapping, just clips out-of-range colors. Retains perfect color accuracy for in-range colors but completely destroys out-of-range information. Does not perform any black point adaptation. |
+    | 1  | spline | Simple spline consisting of two polynomials, joined by a single pivot point, which is tuned based on the source scene average brightness (taking into account dynamic metadata if available). This function can be used for both forward and inverse tone mapping. |
+    | 2  | st2094-40 | EETF from SMPTE ST 2094-40 Annex B, which uses the provided OOTF based on Bezier curves to perform tone-mapping. The OOTF used is adjusted based on the ratio between the targeted and actual display peak luminances. In the absence of HDR10+ metadata, falls back to a simple constant bezier curve. |
+    | 3  | st2094-10 | EETF from SMPTE ST 2094-10 Annex B.2, which takes into account the input signal average luminance in addition to the maximum/minimum. |
+    | 4  | bt2390 | EETF from the ITU-R Report BT.2390, a hermite spline roll-off with linear segment. |
+    | 5  | bt2446a | EETF from ITU-R Report BT.2446, method A. Can be used for both forward and inverse tone mapping. |
+    | 6  | reinhard | Very simple non-linear curve. Named after Erik Reinhard. |
+    | 7  | mobius | Generalization of the `reinhard` tone mapping algorithm to support an additional linear slope near black. The name is derived from its function shape `(ax+b)/(cx+d)`, which is known as a Möbius transformation. This function is considered legacy/low-quality, and should not be used. |
+    | 8  | hable | Piece-wise, filmic tone-mapping algorithm developed by John Hable for use in Uncharted 2, inspired by a similar tone-mapping algorithm used by Kodak. Popularized by its use in video games with HDR rendering. Preserves both dark and bright details very well, but comes with the drawback of changing the average brightness quite significantly. This is sort of similar to `reinhard` with `reinhard_contrast=0.24`. This function is considered legacy/low-quality, and should not be used. |
+    | 9  | gamma | Fits a gamma (power) function to transfer between the source and target color spaces, effectively resulting in a perceptual hard-knee joining two roughly linear sections. This preserves details at all scales, but can result in an image with a muted or dull appearance. This function is considered legacy/low-quality and should not be used. |
+    | 10 | linear | Linearly stretches the input range to the output range, in PQ space. This will preserve all details accurately, but results in a significantly different average brightness. Can be used for inverse tone-mapping in addition to regular tone-mapping. |
+    | 11 | linearlight | Like `linear`, but in linear light (instead of PQ). Works well for small range adjustments but may cause severe darkening when downconverting from e.g. 10k nits to SDR. |
+- `metadata`: Data source to use when tone-mapping. Setting this to a specific
+value allows overriding the default metadata preference logic. Defaults to 0
+(automatic selection).
+    | `metadata` | Description |
+    | --- | --- |
+    | 0 | Automatic selection |
+    | 1 | None (disabled) |
+    | 2 | HDR10 (static) |
+    | 3 | HDR10+ (MaxRGB) |
+    | 4 | Luminance (CIE Y) |
 - `use_dovi`: Whether to use the Dolby Vision RPU for ST2086 metadata. Defaults to true when tonemapping from Dolby Vision.
 - `visualize_lut`: Display a (PQ-PQ) graph of the active tone-mapping LUT. See [mpv docs](https://mpv.io/manual/master/#options-tone-mapping-visualize).
 - `show_clipping`: Highlight hard-clipped pixels during tone-mapping
