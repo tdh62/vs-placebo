@@ -6,7 +6,15 @@ project('vs-placebo', ['c', 'cpp'],
 
 win32 = host_machine.system() == 'windows' or host_machine.system() == 'cygwin'
 
-placebo = dependency('libplacebo', required: true, version: '>=6.269.0', static: win32)
+if win32
+  # Use static versions of these libraries
+  shaderc_combined = dependency('shaderc_combined')
+  meson.override_dependency('shaderc', shaderc_combined)
+  spirv_cross_c = dependency('spirv-cross-c')
+  meson.override_dependency('spirv-cross-c-shared', spirv_cross_c)
+endif
+
+placebo = dependency('libplacebo', required: true, version: '>=5.229.0', static: win32)
 vapoursynth_dep = dependency('vapoursynth', static: win32).partial_dependency(includes: true, compile_args: true)
 dovi = dependency('dovi', required: false)
 
