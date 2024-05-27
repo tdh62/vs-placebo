@@ -23,7 +23,7 @@ void *VSPlaceboInit(enum pl_log_level log_level) {
     ));
 
     if (!p->log) {
-        fprintf_s(stderr, "Failed initializing libplacebo\n");
+        fprintf(stderr, "Failed initializing libplacebo\n");
         goto error;
     }
 
@@ -34,7 +34,7 @@ void *VSPlaceboInit(enum pl_log_level log_level) {
     p->vk = pl_vulkan_create(p->log, &vp);
 
     if (!p->vk) {
-        fprintf_s(stderr, "Failed creating vulkan context\n");
+        fprintf(stderr, "Failed creating vulkan context\n");
         goto error;
     }
 
@@ -43,13 +43,13 @@ void *VSPlaceboInit(enum pl_log_level log_level) {
 
     p->dp = pl_dispatch_create(p->log, p->gpu);
     if (!p->dp) {
-        fprintf_s(stderr, "Failed creating shader dispatch object\n");
+        fprintf(stderr, "Failed creating shader dispatch object\n");
         goto error;
     }
 
     p->rr = pl_renderer_create(p->log, p->gpu);
     if (!p->rr) {
-        fprintf_s(stderr, "Failed creating renderer\n");
+        fprintf(stderr, "Failed creating renderer\n");
         goto error;
     }
 
