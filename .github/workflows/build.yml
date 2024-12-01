@@ -85,7 +85,31 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - name: Get current date and random hash
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2.25.0
+        with:
+          msystem: UCRT64
+          install: >-
+            base-devel
+            mingw-w64-ucrt-x86_64-jq
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-vapoursynth
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-spirv-tools
+            mingw-w64-ucrt-x86_64-spirv-cross
+            mingw-w64-ucrt-x86_64-vulkan
+            mingw-w64-ucrt-x86_64-vulkan-headers
+            mingw-w64-ucrt-x86_64-vulkan-loader
+            mingw-w64-ucrt-x86_64-libdovi
+            mingw-w64-ucrt-x86_64-lcms2
+            mingw-w64-ucrt-x86_64-shaderc
+      - name: Build vs-placebo
         run: |
           echo "short_date=$(date "+%Y%m%d")" >> $GITHUB_ENV
           echo "random_hash=$(echo $RANDOM | md5sum | head -c 20)" >> $GITHUB_ENV
