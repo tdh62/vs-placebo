@@ -6,3 +6,5 @@ cmake-build-debug/
 vapoursynth
 vapoursynth/
 .vscode
+.cache/*
+.DS_Store
