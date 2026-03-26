@@ -16,8 +16,6 @@ typedef struct {
     int dither;
     struct pl_render_params *render_params;
     uint8_t frame_index;
-
-    pthread_mutex_t lock;
 } DebandData;
 
 bool vspl_deband_do_image(DebandData *dbd_data, struct pl_frame *src_img, struct pl_frame *dst_img, const VSAPI *vsapi)
@@ -174,7 +172,7 @@ static const VSFrameRef *VS_CC VSPlaceboDebandGetFrame(int n, int activationReas
         };
         struct pl_frame dst_img = src_img;
 
-        pthread_mutex_lock(&dbd_data->lock); // libplacebo isn’t thread-safe
+        pthread_mutex_lock(&vspl_vulkan_mutex);
 
         struct priv *p = dbd_data->vf;
 
@@ -227,7 +225,7 @@ static const VSFrameRef *VS_CC VSPlaceboDebandGetFrame(int n, int activationReas
             vspl_deband_download_planes(dbd_data, vsapi, dst, data, &dst_img);
         }
 
-        pthread_mutex_unlock(&dbd_data->lock);
+        pthread_mutex_unlock(&vspl_vulkan_mutex);
 
         vsapi->freeFrame(frame);
         return dst;
@@ -243,7 +241,6 @@ static void VS_CC VSPlaceboDebandFree(void *instanceData, VSCore *core, const VS
     free((void *) d->render_params->dither_params);
     free((void *) d->render_params->deband_params);
     free(d->render_params);
-    pthread_mutex_destroy(&d->lock);
     free(d);
 }
 
@@ -252,12 +249,6 @@ void VS_CC VSPlaceboDebandCreate(const VSMap *in, VSMap *out, void *userData, VS
     DebandData *data;
     int err;
     enum pl_log_level log_level;
-
-    if (pthread_mutex_init(&d.lock, NULL) != 0)
-    {
-        vsapi->setError(out, "placebo.Deband: mutex init failed!");
-        return;
-    }
 
     log_level = vsapi->propGetInt(in, "log_level", 0, &err);
     if (err)
@@ -310,5 +301,5 @@ void VS_CC VSPlaceboDebandCreate(const VSMap *in, VSMap *out, void *userData, VS
     data = malloc(sizeof(d));
     *data = d;
 
-    vsapi->createFilter(in, out, "Deband", VSPlaceboDebandInit, VSPlaceboDebandGetFrame, VSPlaceboDebandFree, fmParallel, 0, data, core);
+    vsapi->createFilter(in, out, "Deband", VSPlaceboDebandInit, VSPlaceboDebandGetFrame, VSPlaceboDebandFree, fmSerial, 0, data, core);
 }

@@ -27,7 +27,6 @@ typedef  struct {
     struct pl_sigmoid_params *sigmoid_params;
     enum pl_color_transfer trc;
     bool linear;
-    pthread_mutex_t lock;
 } ShaderData;
 
 
@@ -223,13 +222,13 @@ static const VSFrameRef *VS_CC VSPlaceboShaderGetFrame(int n, int activationReas
 
         void *packed_dst = malloc(d->width * d->height * 2 * 3);
 
-        pthread_mutex_lock(&d->lock);
+        pthread_mutex_lock(&vspl_vulkan_mutex);
 
         if (vspl_shader_reconfig(d->vf, planes, vsapi, d)) {
             vspl_shader_filter(d->vf, packed_dst, planes, d, n, vsapi);
         }
 
-        pthread_mutex_unlock(&d->lock);
+        pthread_mutex_unlock(&vspl_vulkan_mutex);
 
         struct p2p_buffer_param pack_params = {
             .width = d->width,
@@ -262,7 +261,6 @@ static void VS_CC VSPlaceboShaderFree(void *instanceData, VSCore *core, const VS
     free(d->sampleParams);
     free(d->sigmoid_params);
     VSPlaceboUninit(d->vf);
-    pthread_mutex_destroy(&d->lock);
     free(d);
 }
 
@@ -271,11 +269,6 @@ void VS_CC VSPlaceboShaderCreate(const VSMap *in, VSMap *out, void *userData, VS
     ShaderData *data;
     int err;
     enum pl_log_level log_level;
-
-    if (pthread_mutex_init(&d.lock, NULL) != 0) {
-        vsapi->setError(out, "placebo.Shader: mutex init failed\n");
-        return;
-    }
 
     log_level = vsapi->propGetInt(in, "log_level", 0, &err);
     if (err)
@@ -436,5 +429,5 @@ void VS_CC VSPlaceboShaderCreate(const VSMap *in, VSMap *out, void *userData, VS
     data = malloc(sizeof(d));
     *data = d;
 
-    vsapi->createFilter(in, out, "Shader", VSPlaceboShaderInit, VSPlaceboShaderGetFrame, VSPlaceboShaderFree, fmParallel, 0, data, core);
+    vsapi->createFilter(in, out, "Shader", VSPlaceboShaderInit, VSPlaceboShaderGetFrame, VSPlaceboShaderFree, fmSerial, 0, data, core);
 }

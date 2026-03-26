@@ -36,8 +36,6 @@ typedef struct {
     struct pl_color_space *src_pl_csp;
     struct pl_color_space *dst_pl_csp;
 
-    pthread_mutex_t lock;
-
     float original_src_max;
     float original_src_min;
     
@@ -437,13 +435,12 @@ static const VSFrameRef *VS_CC VSPlaceboTMGetFrame(int n, int activationReason, 
         }
 
         void *packed_dst = malloc(w * h * 2 * 3);
-        pthread_mutex_lock(&tm_data->lock); // libplacebo isn’t thread-safe
 
+        pthread_mutex_lock(&vspl_vulkan_mutex);
         if (vspl_tonemap_reconfig(tm_data->vf, planes, vsapi)) {
             vspl_tonemap_filter(tm_data, packed_dst, planes, vsapi, src_repr, dst_repr);
         }
-
-        pthread_mutex_unlock(&tm_data->lock);
+        pthread_mutex_unlock(&vspl_vulkan_mutex);
 
         struct p2p_buffer_param pack_params = {
             .width = w,
@@ -484,7 +481,6 @@ static void VS_CC VSPlaceboTMFree(void *instanceData, VSCore *core, const VSAPI 
     free((void *) tm_data->renderParams->color_map_params);
     free(tm_data->renderParams);
 
-    pthread_mutex_destroy(&tm_data->lock);
     free(tm_data);
 }
 
@@ -493,12 +489,6 @@ void VS_CC VSPlaceboTMCreate(const VSMap *in, VSMap *out, void *userData, VSCore
     TMData *tm_data;
     int err;
     enum pl_log_level log_level;
-
-    if (pthread_mutex_init(&d.lock, NULL) != 0)
-    {
-        vsapi->setError(out, "placebo.Tonemap: mutex init failed\n");
-        return;
-    }
 
     log_level = vsapi->propGetInt(in, "log_level", 0, &err);
     if (err)
@@ -670,5 +660,5 @@ void VS_CC VSPlaceboTMCreate(const VSMap *in, VSMap *out, void *userData, VSCore
     tm_data = malloc(sizeof(d));
     *tm_data = d;
 
-    vsapi->createFilter(in, out, "Tonemap", VSPlaceboTMInit, VSPlaceboTMGetFrame, VSPlaceboTMFree, fmParallel, 0, tm_data, core);
+    vsapi->createFilter(in, out, "Tonemap", VSPlaceboTMInit, VSPlaceboTMGetFrame, VSPlaceboTMFree, fmSerial, 0, tm_data, core);
 }

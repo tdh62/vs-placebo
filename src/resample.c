@@ -30,7 +30,6 @@ typedef struct {
     struct pl_sigmoid_params *sigmoid_params;
     enum pl_color_transfer trc;
     bool linear;
-    pthread_mutex_t lock;
 } ResampleData;
 
 bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_width, float src_height, const VSAPI *vsapi, float sx, float sy)
@@ -342,13 +341,13 @@ static const VSFrameRef *VS_CC VSPlaceboResampleGetFrame(int n, int activationRe
             const float src_w = shift ? d->src_width / subsampling_w : d->src_width;
             const float src_h = shift ? d->src_height / subsampling_h : d->src_height;
 
-            pthread_mutex_lock(&d->lock);
+            pthread_mutex_lock(&vspl_vulkan_mutex);
 
             if (vspl_resample_reconfig(d->vf, &plane, w, h, vsapi)) {
                 vspl_resample_filter(d->vf, dst, &plane, d, w, h, src_w, src_h, sx, sy, vsapi, i);
             }
 
-            pthread_mutex_unlock(&d->lock);
+            pthread_mutex_unlock(&vspl_vulkan_mutex);
         }
 
         const VSMap *src_props = vsapi->getFramePropsRO(frame);
@@ -380,7 +379,6 @@ static void VS_CC VSPlaceboResampleFree(void *instanceData, VSCore *core, const 
     free(d->sampleParams);
     free(d->sigmoid_params);
     VSPlaceboUninit(d->vf);
-    pthread_mutex_destroy(&d->lock);
     free(d);
 }
 
@@ -389,12 +387,6 @@ void VS_CC VSPlaceboResampleCreate(const VSMap *in, VSMap *out, void *useResampl
     ResampleData *data;
     int err;
     enum pl_log_level log_level;
-
-    if (pthread_mutex_init(&d.lock, NULL) != 0)
-    {
-        vsapi->setError(out, "placebo.Resample: mutex init failed\n");
-        return;
-    }
 
     log_level = vsapi->propGetInt(in, "log_level", 0, &err);
     if (err)
@@ -507,5 +499,5 @@ void VS_CC VSPlaceboResampleCreate(const VSMap *in, VSMap *out, void *useResampl
     data = malloc(sizeof(d));
     *data = d;
 
-    vsapi->createFilter(in, out, "Resample", VSPlaceboResampleInit, VSPlaceboResampleGetFrame, VSPlaceboResampleFree, fmParallel, 0, data, core);
+    vsapi->createFilter(in, out, "Resample", VSPlaceboResampleInit, VSPlaceboResampleGetFrame, VSPlaceboResampleFree, fmSerial, 0, data, core);
 }
