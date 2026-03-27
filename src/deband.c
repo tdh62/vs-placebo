@@ -304,7 +304,7 @@ void VS_CC VSPlaceboDebandCreate(const VSMap *in, VSMap *out, void *userData, VS
         d.vi,
         VSPlaceboDebandGetFrame,
         VSPlaceboDebandFree,
-        fmParallel,
+        fmParallelRequests,
         deps,
         1,
         data,

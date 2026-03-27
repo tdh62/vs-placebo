@@ -2,6 +2,7 @@
 #define VS_PLACEBO_LIBRARY_H
 
 #include <pthread.h>
+
 #include <libplacebo/dispatch.h>
 #include <libplacebo/shaders/sampling.h>
 #include <libplacebo/utils/upload.h>

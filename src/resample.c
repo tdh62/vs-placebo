@@ -539,7 +539,7 @@ void VS_CC VSPlaceboResampleCreate(const VSMap *in, VSMap *out, void *useResampl
         &vi_out,
         VSPlaceboResampleGetFrame,
         VSPlaceboResampleFree,
-        fmParallel,
+        fmParallelRequests,
         deps,
         1,
         data,

@@ -430,7 +430,7 @@ void VS_CC VSPlaceboShaderCreate(const VSMap *in, VSMap *out, void *userData, VS
         &d.vi_out,
         VSPlaceboShaderGetFrame,
         VSPlaceboShaderFree,
-        fmParallel,
+        fmParallelRequests,
         deps,
         1,
         data,

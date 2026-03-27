@@ -26,7 +26,7 @@ add_project_arguments(
 
 placebo = dependency('libplacebo', required: true, version: '>=5.229.0', static: win32)
 vapoursynth_dep = dependency('vapoursynth', static: win32).partial_dependency(includes: true, compile_args: true)
-dovi = dependency('dovi', required: false)
+dovi = dependency('dovi', required: false, static: win32)
 
 use_dovi = dovi.found()
 
@@ -45,7 +45,7 @@ sources = []
 subdir('src')
 
 shared_module('vs_placebo', sources,
-  dependencies: [placebo, vapoursynth_dep, dovi],
+  dependencies: [dependency('threads'), placebo, vapoursynth_dep, dovi],
   link_with: [p2p],
   name_prefix: 'lib',
   install_dir : join_paths(vapoursynth_dep.get_variable(pkgconfig: 'libdir'), 'vapoursynth'),

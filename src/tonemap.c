@@ -662,7 +662,7 @@ void VS_CC VSPlaceboTMCreate(const VSMap *in, VSMap *out, void *userData, VSCore
         &d.vi_out,
         VSPlaceboTMGetFrame,
         VSPlaceboTMFree,
-        fmParallel,
+        fmParallelRequests,
         deps,
         1,
         tm_data,
