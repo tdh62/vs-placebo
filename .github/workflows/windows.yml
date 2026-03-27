@@ -1,0 +1,65 @@
+name: Build vs-placebo Windows DLL
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build (MinGW64)
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSYS2 and Install Dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-libplacebo
+            mingw-w64-x86_64-vapoursynth
+            mingw-w64-x86_64-vulkan-headers
+            mingw-w64-x86_64-vulkan-loader
+
+      - name: Configure Build (Meson)
+        run: |
+          meson setup build --buildtype release -Db_lto=true -Dc_args="-DPL_STATIC" -Dcpp_args="-DPL_STATIC"
+
+      - name: Compile (Ninja)
+        run: |
+          ninja -C build
+
+      - name: Package DLLs with Dependencies
+        run: |
+          mkdir -p release
+          cp build/libvs_placebo.dll release/
+
+          ldd build/libvs_placebo.dll | grep -i mingw64 > deps.txt || true
+
+          cat deps.txt | awk '{print $3}' | sed 's/\r//g' | while read -r dll; do
+            if [ -f "$dll" ]; then
+              echo "打包依赖: $dll"
+              cp "$dll" release/
+            fi
+          done
+
+          ls -lh release/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vs-placebo-windows-dll-with-deps
+          path: release/
+          if-no-files-found: error
