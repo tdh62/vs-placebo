@@ -1,14 +1,32 @@
 project('vs-placebo', ['c', 'cpp'],
-  default_options: ['buildtype=release', 'b_ndebug=if-release', 'c_std=c11', 'cpp_std=c++11'],
-  meson_version: '>=0.51.0',
+  default_options: ['buildtype=release', 'b_ndebug=if-release', 'c_std=c17', 'cpp_std=c++20'],
+  meson_version: '>=1.4.0',
   version: '1.4.4'
 )
 
+cc = meson.get_compiler('c')
 win32 = host_machine.system() == 'windows' or host_machine.system() == 'cygwin'
 
-placebo = dependency('libplacebo', required: true, version: '>=6.269.0', static: win32)
+if win32
+  # Use static versions of these libraries
+  shaderc_combined = dependency('shaderc_combined')
+  meson.override_dependency('shaderc', shaderc_combined)
+  spirv_cross_c = dependency('spirv-cross-c')
+  meson.override_dependency('spirv-cross-c-shared', spirv_cross_c)
+endif
+
+add_project_arguments(
+   cc.get_supported_arguments(
+    '-Werror-implicit-function-declaration',
+    '-Werror=discarded-qualifiers',
+    '-Werror=incompatible-pointer-types'
+  ),
+  language: 'c'
+)
+
+placebo = dependency('libplacebo', required: true, version: '>=5.229.0', static: win32)
 vapoursynth_dep = dependency('vapoursynth', static: win32).partial_dependency(includes: true, compile_args: true)
-dovi = dependency('dovi', required: false)
+dovi = dependency('dovi', required: false, static: win32)
 
 use_dovi = dovi.found()
 
@@ -27,7 +45,7 @@ sources = []
 subdir('src')
 
 shared_module('vs_placebo', sources,
-  dependencies: [placebo, vapoursynth_dep, dovi],
+  dependencies: [dependency('threads'), placebo, vapoursynth_dep, dovi],
   link_with: [p2p],
   name_prefix: 'lib',
   install_dir : join_paths(vapoursynth_dep.get_variable(pkgconfig: 'libdir'), 'vapoursynth'),

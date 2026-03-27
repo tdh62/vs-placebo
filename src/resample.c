@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-#include "VapourSynth.h"
-#include "VSHelper.h"
+#include <VapourSynth4.h>
+#include <VSHelper4.h>
 
 #include <libplacebo/filters.h>
 #include <libplacebo/colorspace.h>
@@ -12,7 +12,7 @@
 #include "vs-placebo.h"
 
 typedef struct {
-    VSNodeRef *node;
+    VSNode *node;
     const VSVideoInfo *vi;
     void *vf;
     int width;
@@ -30,9 +30,23 @@ typedef struct {
     struct pl_sigmoid_params *sigmoid_params;
     enum pl_color_transfer trc;
     bool linear;
+
+    /** Minimum luminance. */
+    float min_luma;
 } ResampleData;
 
-bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_width, float src_height, const VSAPI *vsapi, float sx, float sy)
+bool vspl_resample_do_plane(
+    struct priv *p,
+    void *data,
+    int w,
+    int h,
+    float src_width,
+    float src_height,
+    VSCore *core,
+    const VSAPI *vsapi,
+    float sx,
+    float sy
+)
 {
     ResampleData *d = (ResampleData*) data;
     pl_shader sh = pl_dispatch_begin(p->dp);
@@ -43,7 +57,8 @@ bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_
     sampleFilterParams.lut = &d->lut;
 
     struct pl_color_space *color = pl_color_space(
-        .transfer = d->trc
+        .transfer = d->trc,
+        .hdr.min_luma = d->min_luma,
     );
 
     struct pl_sample_src *src = pl_sample_src(
@@ -64,7 +79,7 @@ bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_
     );
 
     if (!pl_tex_recreate(p->gpu, &sample_fbo, tex_params))
-        vsapi->logMessage(mtCritical, "failed creating intermediate color texture!\n");
+        vsapi->logMessage(mtCritical, "failed creating intermediate color texture!\n", core);
 
     pl_shader_sample_direct(ish, src);
     if (d->linear)
@@ -77,7 +92,7 @@ bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_
         .target = sample_fbo,
         .shader = &ish
     ))) {
-        vsapi->logMessage(mtCritical, "Failed linearizing/sigmoidizing! \n");
+        vsapi->logMessage(mtCritical, "Failed linearizing/sigmoidizing! \n", core);
         return false;
     }
 
@@ -98,7 +113,7 @@ bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_
 
     if (d->sampleParams->filter.polar) {
         if (!pl_shader_sample_polar(sh, src, &sampleFilterParams))
-            vsapi->logMessage(mtCritical, "Failed dispatching scaler...\n");
+            vsapi->logMessage(mtCritical, "Failed dispatching scaler...\n", core);
     } else {
         struct pl_sample_src src1 = *src, src2 = *src;
         src1.new_w = src->tex->params.w;
@@ -110,7 +125,7 @@ bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_
         pl_shader tsh = pl_dispatch_begin(p->dp);
 
         if (!pl_shader_sample_ortho2(tsh, &src1, &sampleFilterParams)) {
-            vsapi->logMessage(mtCritical, "Failed dispatching vertical pass!\n");
+            vsapi->logMessage(mtCritical, "Failed dispatching vertical pass!\n", core);
             pl_dispatch_abort(p->dp, &tsh);
         }
 
@@ -123,20 +138,20 @@ bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_
         );
 
         if (!pl_tex_recreate(p->gpu, &sep_fbo, tex_params))
-            vsapi->logMessage(mtCritical, "failed creating intermediate texture!\n");
+            vsapi->logMessage(mtCritical, "failed creating intermediate texture!\n", core);
 
         if (!pl_dispatch_finish(p->dp, pl_dispatch_params (
             .target = sep_fbo,
             .shader = &tsh
         ))) {
-            vsapi->logMessage(mtCritical, "Failed rendering vertical pass! \n");
+            vsapi->logMessage(mtCritical, "Failed rendering vertical pass! \n", core);
             return false;
         }
 
         src2.tex = sep_fbo;
         src2.scale = 1.0;
         if (!pl_shader_sample_ortho2(sh, &src2, &sampleFilterParams))
-            vsapi->logMessage(mtCritical, "Failed dispatching horizontal pass! \n");
+            vsapi->logMessage(mtCritical, "Failed dispatching horizontal pass! \n", core);
     }
 
     if (d->sigmoid_params)
@@ -175,13 +190,13 @@ bool vspl_resample_do_plane(struct priv *p, void *data, int w, int h, float src_
 
 }
 
-bool vspl_resample_reconfig(void *priv, struct pl_plane_data *data, int w, int h, const VSAPI *vsapi)
+bool vspl_resample_reconfig(void *priv, struct pl_plane_data *data, int w, int h, VSCore *core, const VSAPI *vsapi)
 {
     struct priv *p = priv;
 
     pl_fmt fmt = pl_plane_find_fmt(p->gpu, NULL, data);
     if (!fmt) {
-        vsapi->logMessage(mtCritical, "Failed configuring filter: no good texture format!\n");
+        vsapi->logMessage(mtCritical, "Failed configuring filter: no good texture format!\n", core);
         return false;
     }
 
@@ -204,14 +219,28 @@ bool vspl_resample_reconfig(void *priv, struct pl_plane_data *data, int w, int h
     ));
 
     if (!ok) {
-        vsapi->logMessage(mtCritical, "Failed creating GPU textures!\n");
+        vsapi->logMessage(mtCritical, "Failed creating GPU textures!\n", core);
         return false;
     }
 
     return true;
 }
 
-bool vspl_resample_filter(void *priv, VSFrameRef *dst, struct pl_plane_data *src, void *d, int w, int h, float src_width, float src_height, float sx, float sy, const VSAPI *vsapi, int planeIdx)
+bool vspl_resample_filter(
+    void *priv,
+    VSFrame *dst,
+    struct pl_plane_data *src,
+    void *d,
+    int w,
+    int h,
+    float src_width,
+    float src_height,
+    float sx,
+    float sy,
+    VSCore *core,
+    const VSAPI *vsapi,
+    int planeIdx
+)
 {
     struct priv *p = priv;
 
@@ -227,12 +256,12 @@ bool vspl_resample_filter(void *priv, VSFrameRef *dst, struct pl_plane_data *src
     ));
 
     if (!ok) {
-        vsapi->logMessage(mtCritical, "Failed uploading data to the GPU!\n");
+        vsapi->logMessage(mtCritical, "Failed uploading data to the GPU!\n", core);
         return false;
     }
     // Process plane
-    if (!vspl_resample_do_plane(p, d, w, h, src_width, src_height, vsapi, sx, sy)) {
-        vsapi->logMessage(mtCritical, "Failed processing planes!\n");
+    if (!vspl_resample_do_plane(p, d, w, h, src_width, src_height, core, vsapi, sx, sy)) {
+        vsapi->logMessage(mtCritical, "Failed processing planes!\n", core);
         return false;
     }
 
@@ -247,7 +276,7 @@ bool vspl_resample_filter(void *priv, VSFrameRef *dst, struct pl_plane_data *src
     ));
 
     if (!ok) {
-        vsapi->logMessage(mtCritical, "Failed downloading data from the GPU!\n");
+        vsapi->logMessage(mtCritical, "Failed downloading data from the GPU!\n", core);
         return false;
     }
 
@@ -269,51 +298,43 @@ void vspl_propagate_sar(
     int64_t sar_num = 0;
     int64_t sar_den = 0;
 
-    if (vsapi->propNumElements(src_props, "_SARNum") > 0)
-        sar_num = vsapi->propGetInt(src_props, "_SARNum", 0, NULL);
-    if (vsapi->propNumElements(src_props, "_SARDen") > 0)
-        sar_den = vsapi->propGetInt(src_props, "_SARDen", 0, NULL);
+    if (vsapi->mapNumElements(src_props, "_SARNum") > 0)
+        sar_num = vsapi->mapGetInt(src_props, "_SARNum", 0, NULL);
+    if (vsapi->mapNumElements(src_props, "_SARDen") > 0)
+        sar_den = vsapi->mapGetInt(src_props, "_SARDen", 0, NULL);
 
     if (sar_num <= 0 || sar_den <= 0) {
-        vsapi->propDeleteKey(dst_props, "_SARNum");
-        vsapi->propDeleteKey(dst_props, "_SARDen");
+        vsapi->mapDeleteKey(dst_props, "_SARNum");
+        vsapi->mapDeleteKey(dst_props, "_SARDen");
     } else {
         if (!isnan(src_width) && src_width != width)
-            muldivRational(&sar_num, &sar_den, llround(src_width * 16), dst_width * 16);
+            vsh_muldivRational(&sar_num, &sar_den, llround(src_width * 16), dst_width * 16);
         else
-            muldivRational(&sar_num, &sar_den, width, dst_width);
+            vsh_muldivRational(&sar_num, &sar_den, width, dst_width);
 
         if (!isnan(src_height) && src_height != height)
-            muldivRational(&sar_num, &sar_den, dst_height * 16, llround(src_height * 16));
+            vsh_muldivRational(&sar_num, &sar_den, dst_height * 16, llround(src_height * 16));
         else
-            muldivRational(&sar_num, &sar_den, dst_height, height);
+            vsh_muldivRational(&sar_num, &sar_den, dst_height, height);
 
-        vsapi->propSetInt(dst_props, "_SARNum", sar_num, 0);
-        vsapi->propSetInt(dst_props, "_SARDen", sar_den, 0);
+        vsapi->mapSetInt(dst_props, "_SARNum", sar_num, maReplace);
+        vsapi->mapSetInt(dst_props, "_SARDen", sar_den, maReplace);
     }
 }
 
-static void VS_CC VSPlaceboResampleInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
-    ResampleData *d = (ResampleData *) *instanceData;
-    VSVideoInfo new_vi = (VSVideoInfo) *(d->vi);
-    new_vi.width = d->width;
-    new_vi.height = d->height;
-    vsapi->setVideoInfo(&new_vi, 1, node);
-}
-
-static const VSFrameRef *VS_CC VSPlaceboResampleGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-    ResampleData *d = (ResampleData *) *instanceData;
+static const VSFrame *VS_CC VSPlaceboResampleGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+    ResampleData *d = (ResampleData *) instanceData;
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
-        const VSFrameRef *frame = vsapi->getFrameFilter(n, d->node, frameCtx);
+        const VSFrame *frame = vsapi->getFrameFilter(n, d->node, frameCtx);
 
-        const VSFormat *srcFmt = d->vi->format;
+        const VSVideoFormat *srcFmt = vsapi->getVideoFrameFormat(frame);
         const float subsampling_w = 1 << srcFmt->subSamplingW;
         const float subsampling_h = 1 << srcFmt->subSamplingH;
 
-        VSFrameRef *dst = vsapi->newVideoFrame(srcFmt, d->width, d->height, frame, core);
+        VSFrame *dst = vsapi->newVideoFrame(srcFmt, d->width, d->height, frame, core);
 
         for (unsigned int i = 0; i < srcFmt->numPlanes; i++) {
             struct pl_plane_data plane = {
@@ -322,7 +343,7 @@ static const VSFrameRef *VS_CC VSPlaceboResampleGetFrame(int n, int activationRe
                 .height = vsapi->getFrameHeight(frame, i),
                 .pixel_stride = srcFmt->bytesPerSample,
                 .row_stride = vsapi->getStride(frame, i),
-                .pixels = vsapi->getReadPtr((VSFrameRef *) frame, i),
+                .pixels = vsapi->getReadPtr((VSFrame *) frame, i),
                 .component_size[0] = srcFmt->bitsPerSample,
                 .component_pad[0] = 0,
                 .component_map[0] = 0,
@@ -334,7 +355,7 @@ static const VSFrameRef *VS_CC VSPlaceboResampleGetFrame(int n, int activationRe
             const float subsampling_shift_w = (0.5f * (1.0f - (float) w / (float) d->vi->width)) / subsampling_w;
             const float subsampling_shift_h = 0.0;
 
-            const bool shift = srcFmt->colorFamily == cmYUV && (i == 1 || i == 2);
+            const bool shift = srcFmt->colorFamily == cfYUV && (i == 1 || i == 2);
             const float sx = shift ? subsampling_shift_w + d->src_x / subsampling_w : d->src_x;
             const float sy = shift ? subsampling_shift_h + d->src_y / subsampling_h : d->src_y;
 
@@ -343,15 +364,15 @@ static const VSFrameRef *VS_CC VSPlaceboResampleGetFrame(int n, int activationRe
 
             pthread_mutex_lock(&vspl_vulkan_mutex);
 
-            if (vspl_resample_reconfig(d->vf, &plane, w, h, vsapi)) {
-                vspl_resample_filter(d->vf, dst, &plane, d, w, h, src_w, src_h, sx, sy, vsapi, i);
+            if (vspl_resample_reconfig(d->vf, &plane, w, h, core, vsapi)) {
+                vspl_resample_filter(d->vf, dst, &plane, d, w, h, src_w, src_h, sx, sy, core, vsapi, i);
             }
 
             pthread_mutex_unlock(&vspl_vulkan_mutex);
         }
 
-        const VSMap *src_props = vsapi->getFramePropsRO(frame);
-        VSMap *dst_props = vsapi->getFramePropsRW(dst);
+        const VSMap *src_props = vsapi->getFramePropertiesRO(frame);
+        VSMap *dst_props = vsapi->getFramePropertiesRW(dst);
         vspl_propagate_sar(
             src_props,
             dst_props,
@@ -388,79 +409,90 @@ void VS_CC VSPlaceboResampleCreate(const VSMap *in, VSMap *out, void *useResampl
     int err;
     enum pl_log_level log_level;
 
-    log_level = vsapi->propGetInt(in, "log_level", 0, &err);
+    log_level = vsapi->mapGetInt(in, "log_level", 0, &err);
     if (err)
         log_level = PL_LOG_ERR;
 
-    d.node = vsapi->propGetNode(in, "clip", 0, 0);
+    d.node = vsapi->mapGetNode(in, "clip", 0, 0);
     d.vi = vsapi->getVideoInfo(d.node);
+    VSVideoInfo vi_out = *d.vi;
 
-    if ((d.vi->format->bitsPerSample != 8 && d.vi->format->bitsPerSample != 16 && d.vi->format->bitsPerSample != 32)) {
-        vsapi->setError(out, "placebo.Resample: Input bitdepth should be 8, 16 (Integer) or 32 (Float)!.");
+    if ((d.vi->format.bitsPerSample != 8 && d.vi->format.bitsPerSample != 16 && d.vi->format.bitsPerSample != 32)) {
+        vsapi->mapSetError(out, "placebo.Resample: Input bitdepth should be 8, 16 (Integer) or 32 (Float)!.");
         vsapi->freeNode(d.node);
     }
 
     d.vf = VSPlaceboInit(log_level);
 
-    d.width = vsapi->propGetInt(in, "width", 0, &err);
+    d.width = vsapi->mapGetInt(in, "width", 0, &err);
     if (err)
         d.width = d.vi->width;
 
-    d.height = vsapi->propGetInt(in, "height", 0, &err);
+    d.height = vsapi->mapGetInt(in, "height", 0, &err);
     if (err)
         d.height = d.vi->height;
 
-    d.src_width = vsapi->propGetFloat(in, "src_width", 0, &err);
+    vi_out.width = d.width;
+    vi_out.height = d.height;
+
+    d.src_width = vsapi->mapGetFloat(in, "src_width", 0, &err);
     if (err)
         d.src_width = d.vi->width;
 
-    d.src_height = vsapi->propGetFloat(in, "src_height", 0, &err);
+    d.src_height = vsapi->mapGetFloat(in, "src_height", 0, &err);
     if (err)
         d.src_height = d.vi->height;
 
-    d.src_x = vsapi->propGetFloat(in, "sx", 0, &err);
-    d.src_y = vsapi->propGetFloat(in, "sy", 0, &err);
-    d.linear = vsapi->propGetInt(in, "linearize", 0, &err);
+    d.src_x = vsapi->mapGetFloat(in, "sx", 0, &err);
+    d.src_y = vsapi->mapGetFloat(in, "sy", 0, &err);
+    d.linear = vsapi->mapGetInt(in, "linearize", 0, &err);
     // only enable by default for RGB because linearizing YCbCr directly is incorrect and Gray may be a YCbCr plane
-    if (err) d.linear = d.vi->format->colorFamily == cmRGB;
+    if (err) d.linear = d.vi->format.colorFamily == cfRGB;
     // allow linearizing Gray manually, though, if the user knows what he’s doing
-    d.linear = d.linear && (d.vi->format->colorFamily == cmRGB || d.vi->format->colorFamily == cmGray);
+    d.linear = d.linear && (d.vi->format.colorFamily == cfRGB || d.vi->format.colorFamily == cfGray);
 
-    d.trc = vsapi->propGetInt(in, "trc", 0, &err);
+    d.min_luma = vsapi->mapGetFloat(in, "min_luma", 0, &err);
+    if (err) {
+        // Default to infinite contrast to match zimg.
+        d.min_luma = PL_COLOR_HDR_BLACK;
+    }
+
+    d.trc = vsapi->mapGetInt(in, "trc", 0, &err);
     if (err) d.trc = 1;
 
-    struct pl_sigmoid_params *sigmoidParams = malloc(sizeof(struct pl_sigmoid_params));
-    *sigmoidParams = pl_sigmoid_default_params;
-
-    sigmoidParams->center = vsapi->propGetFloat(in, "sigmoid_center", 0, &err);
-    if (err)
-        sigmoidParams->center = pl_sigmoid_default_params.center;
-
-    sigmoidParams->slope = vsapi->propGetFloat(in, "sigmoid_slope", 0, &err);
-    if (err)
-        sigmoidParams->slope = pl_sigmoid_default_params.slope;
-
     // same reasoning as with linear
-    bool sigm = vsapi->propGetInt(in, "sigmoidize", 0, &err);
+    bool sigm = vsapi->mapGetInt(in, "sigmoidize", 0, &err);
     if (err)
-        sigm = d.vi->format->colorFamily == cmRGB;
+        sigm = d.vi->format.colorFamily == cfRGB;
 
-    sigm = sigm && (d.vi->format->colorFamily == cmRGB || d.vi->format->colorFamily == cmGray);
-    d.sigmoid_params = sigm ? sigmoidParams : NULL;
+    sigm = sigm && (d.vi->format.colorFamily == cfRGB || d.vi->format.colorFamily == cfGray);
+    d.sigmoid_params = NULL;
 
+    if (sigm) {
+        struct pl_sigmoid_params *sigmoidParams = malloc(sizeof(struct pl_sigmoid_params));
+        *sigmoidParams = pl_sigmoid_default_params;
+
+        sigmoidParams->center = vsapi->mapGetFloat(in, "sigmoid_center", 0, &err);
+        if (err)
+            sigmoidParams->center = pl_sigmoid_default_params.center;
+
+        sigmoidParams->slope = vsapi->mapGetFloat(in, "sigmoid_slope", 0, &err);
+        if (err)
+            sigmoidParams->slope = pl_sigmoid_default_params.slope;
+
+        d.sigmoid_params = sigmoidParams;
+    }
 
     struct pl_sample_filter_params *sampleFilterParams = calloc(1, sizeof(struct pl_sample_filter_params));;
 
     d.lut = NULL;
     sampleFilterParams->no_widening = false;
     sampleFilterParams->no_compute = false;
-    sampleFilterParams->lut_entries = vsapi->propGetInt(in, "lut_entries", 0, &err);
-    sampleFilterParams->cutoff = vsapi->propGetFloat(in, "cutoff", 0, &err);
-    sampleFilterParams->antiring = vsapi->propGetFloat(in, "antiring", 0, &err);
+    sampleFilterParams->antiring = vsapi->mapGetFloat(in, "antiring", 0, &err);
 
-    const char *filter = vsapi->propGetData(in, "filter", 0, &err);
+    const char *filter = vsapi->mapGetData(in, "filter", 0, &err);
     if (err) {
-        vsapi->logMessage(mtWarning, "Unspecified filter... selecting ewa_lanczos.\n");
+        vsapi->logMessage(mtWarning, "Unspecified filter... selecting ewa_lanczos.\n", core);
         filter = "ewa_lanczos";
     }
 
@@ -468,30 +500,30 @@ void VS_CC VSPlaceboResampleCreate(const VSMap *in, VSMap *out, void *useResampl
     if (filter_config) {
         sampleFilterParams->filter = *filter_config;
     } else {
-        vsapi->logMessage(mtWarning, "Unknown filter... selecting ewa_lanczos.\n");
+        vsapi->logMessage(mtWarning, "Unknown filter... selecting ewa_lanczos.\n", core);
         sampleFilterParams->filter = pl_filter_ewa_lanczos;
     }
 
-    sampleFilterParams->filter.clamp = vsapi->propGetFloat(in, "clamp", 0, &err);
-    sampleFilterParams->filter.blur = vsapi->propGetFloat(in, "blur", 0, &err);
-    sampleFilterParams->filter.taper = vsapi->propGetFloat(in, "taper", 0, &err);
+    sampleFilterParams->filter.clamp = vsapi->mapGetFloat(in, "clamp", 0, &err);
+    sampleFilterParams->filter.blur = vsapi->mapGetFloat(in, "blur", 0, &err);
+    sampleFilterParams->filter.taper = vsapi->mapGetFloat(in, "taper", 0, &err);
 
     struct pl_filter_function *f = calloc(1, sizeof(struct pl_filter_function));
 
     *f = *sampleFilterParams->filter.kernel;
     if (f->resizable) {
-        vsapi->propGetFloat(in, "radius", 0, &err);
+        vsapi->mapGetFloat(in, "radius", 0, &err);
         if (!err)
-            f->radius = vsapi->propGetFloat(in, "radius", 0, &err);
+            f->radius = vsapi->mapGetFloat(in, "radius", 0, &err);
     }
 
-    vsapi->propGetFloat(in, "param1", 0, &err);
+    vsapi->mapGetFloat(in, "param1", 0, &err);
     if (!err && f->tunable[0])
-        f->params[0] = vsapi->propGetFloat(in, "param1", 0, &err);
+        sampleFilterParams->filter.params[0] = vsapi->mapGetFloat(in, "param1", 0, &err);
 
-    vsapi->propGetFloat(in, "param2", 0, &err);
+    vsapi->mapGetFloat(in, "param2", 0, &err);
     if (!err && f->tunable[1])
-        f->params[1] = vsapi->propGetFloat(in, "param2", 0, &err);
+        sampleFilterParams->filter.params[1] = vsapi->mapGetFloat(in, "param2", 0, &err);
 
     sampleFilterParams->filter.kernel = f;
     d.sampleParams = sampleFilterParams;
@@ -499,5 +531,18 @@ void VS_CC VSPlaceboResampleCreate(const VSMap *in, VSMap *out, void *useResampl
     data = malloc(sizeof(d));
     *data = d;
 
-    vsapi->createFilter(in, out, "Resample", VSPlaceboResampleInit, VSPlaceboResampleGetFrame, VSPlaceboResampleFree, fmSerial, 0, data, core);
+    VSFilterDependency deps[] = {{d.node, rpStrictSpatial}};
+
+    vsapi->createVideoFilter(
+        out,
+        "Resample",
+        &vi_out,
+        VSPlaceboResampleGetFrame,
+        VSPlaceboResampleFree,
+        fmParallelRequests,
+        deps,
+        1,
+        data,
+        core
+    );
 }
